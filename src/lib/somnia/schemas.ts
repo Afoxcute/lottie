@@ -28,6 +28,10 @@ export const gameEndSchema =
 export const gameHistorySchema = 
   'uint64 timestamp, uint256 gameId, address player, uint8[] moves'
 
+// Payout executed schema - tracks which payouts have been processed
+export const payoutExecutedSchema = 
+  'uint64 timestamp, uint256 gameId, address winner, uint256 payout, bytes32 txHash'
+
 // Event schema IDs for reactivity
 export const GAME_CREATED_EVENT_ID = 'GameCreated'
 export const GAME_JOINED_EVENT_ID = 'GameJoined'

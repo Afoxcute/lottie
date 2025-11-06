@@ -116,6 +116,17 @@ async function ensureEventSchemasRegistered() {
     )
   } catch (error: any) {
     const errorMessage = error?.message || String(error)
+    
+    // If event schemas are already registered, that's fine - just continue
+    if (
+      errorMessage.includes('EventSchemaAlreadyRegistered') ||
+      errorMessage.includes('already registered') ||
+      errorMessage.includes('AlreadyRegistered')
+    ) {
+      // Event schemas are already registered, which is fine
+      return
+    }
+    
     if (errorMessage.includes('account does not exist') || errorMessage.includes('insufficient funds')) {
       const walletAddress = walletClient.account?.address || 'unknown'
       throw new Error(
@@ -594,12 +605,14 @@ export async function getGameById(gameId: bigint): Promise<Game | null> {
   }
 
   const decoded = data[0] as any[]
-  if (!Array.isArray(decoded)) return null
+  if (!Array.isArray(decoded) || decoded.length < 11) {
+    return null
+  }
 
   const getValue = (field: any) => field?.value?.value ?? field?.value
 
-  const player1Address = String(getValue(decoded[2]))
-  const player2Address = String(getValue(decoded[3]))
+  const player1Address = String(getValue(decoded[2]) || '')
+  const player2Address = String(getValue(decoded[3]) || '')
 
   // Fetch player moves
   const player1Moves = await getPlayerMoves(gameId, player1Address)
@@ -618,16 +631,32 @@ export async function getGameById(gameId: bigint): Promise<Game | null> {
     ? [Number(choicesValue[0] ?? 0), Number(choicesValue[1] ?? 0)]
     : [0, 0]
 
+  // Safely extract values with defaults
+  const gameIdValue = getValue(decoded[1])
+  const stakeValue = getValue(decoded[4])
+  const gameTypeValue = getValue(decoded[5])
+  const roundsPlayedValue = getValue(decoded[6])
+  const isActiveValue = getValue(decoded[9])
+  const lastPlayerMoveValue = getValue(decoded[10])
+
+  // Validate required fields before converting to BigInt
+  if (gameIdValue === undefined || gameIdValue === null) {
+    throw new Error('Game ID is missing from game data')
+  }
+  if (stakeValue === undefined || stakeValue === null) {
+    throw new Error('Stake is missing from game data')
+  }
+
   return {
-    gameId: BigInt(String(getValue(decoded[1]))),
+    gameId: BigInt(String(gameIdValue)),
     players: [player1Address, player2Address],
-    stake: BigInt(String(getValue(decoded[4]))),
-    gameType: Number(getValue(decoded[5])),
-    roundsPlayed: Number(getValue(decoded[6])),
+    stake: BigInt(String(stakeValue)),
+    gameType: Number(gameTypeValue ?? 0),
+    roundsPlayed: Number(roundsPlayedValue ?? 0),
     scores,
     choices,
-    isActive: Boolean(getValue(decoded[9])),
-    lastPlayerMove: String(getValue(decoded[10])),
+    isActive: Boolean(isActiveValue ?? false),
+    lastPlayerMove: String(lastPlayerMoveValue || '0x0000000000000000000000000000000000000000'),
     player1Moves,
     player2Moves,
   }

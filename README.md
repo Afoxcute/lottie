@@ -57,6 +57,58 @@ The application is structured as follows:
   - `CreateGame.tsx`: UI for creating a game.
   - `JoinGame.tsx`: UI for joining a game.
   - `GameInterface.tsx`: Displays the game in progress.
+- **Services**:
+  - `payoutService.ts`: Service that reads game end data from Data Streams and executes token transfers to winners.
+  - `gameService.ts`: Server-side game logic for creating games, joining, making moves, and resolving rounds.
+  - `gameServiceClient.ts`: Client-side service for reading game data from Data Streams.
+- **API Endpoints**:
+  - `/api/game`: Handles game creation, joining, moves, and game state queries.
+  - `/api/payout`: Handles payout execution and queries for unpaid game ends.
+
+## Payout System
+
+The application includes an automated payout service that reads game end data from Somnia Data Streams and executes token transfers to winners.
+
+### How It Works
+
+1. **Game End Detection**: When a game ends, the `gameEndSchema` stores the winner address and calculated payout amount (95% of total pot, with 5% platform fee).
+
+2. **Payout Execution**: The `payoutService.ts` service:
+   - Scans Data Streams for completed games with unpaid winners
+   - Checks if payout has already been executed (using `payoutExecutedSchema`)
+   - Executes native STT token transfers to winners
+   - Records payout execution in Data Streams to prevent duplicate payments
+
+3. **API Endpoints**:
+   - `POST /api/payout` with `action: 'executePayout'` - Execute payout for a specific game
+   - `POST /api/payout` with `action: 'processAllPayouts'` - Process all unpaid payouts
+   - `POST /api/payout` with `action: 'getUnpaidPayouts'` - Get list of unpaid games
+   - `POST /api/payout` with `action: 'getGameEndData'` - Get game end data for a specific game
+
+### Usage
+
+```typescript
+import { executePayoutAPI, processAllPayoutsAPI } from '@/lib/api/payoutApi'
+
+// Execute payout for a specific game
+const result = await executePayoutAPI('1234567890')
+console.log(result) // { success: true, gameId, winner, payout, txHash }
+
+// Process all unpaid payouts
+const { results } = await processAllPayoutsAPI()
+```
+
+### Requirements
+
+- `PRIVATE_KEY` environment variable must be set with a wallet that has sufficient STT balance
+- The wallet must have enough STT to cover all pending payouts
+- `NEXT_PUBLIC_PUBLISHER_ADDRESS` must be set to the publisher address used for Data Streams
+
+### Payout Calculation
+
+- Total Pot = `stake × 2` (both players stake the same amount)
+- Winner Receives = `stake × 2 × 0.95` = `stake × 1.9` (95% of total pot)
+- Platform Fee = 5% of total pot
 
 ## Project Evaluation
 

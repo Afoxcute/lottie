@@ -85,8 +85,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!gameId) {
           return res.status(400).json({ error: 'Missing gameId' })
         }
-        const game = await getGameById(BigInt(gameId))
-        return res.status(200).json({ game: serializeBigInt(game) })
+        try {
+          const game = await getGameById(BigInt(gameId))
+          return res.status(200).json({ game: serializeBigInt(game) })
+        } catch (error: any) {
+          // If game not found or invalid, return null
+          if (error?.message?.includes('missing') || error?.message?.includes('not found')) {
+            return res.status(200).json({ game: null })
+          }
+          throw error
+        }
       }
 
       case 'getUserGames': {
