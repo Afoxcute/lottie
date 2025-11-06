@@ -1,5 +1,24 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { executePayout, processAllUnpaidPayouts, getUnpaidGameEnds, getGameEndData } from '@/lib/somnia/payoutService'
+import { 
+  startPayoutListener, 
+  stopPayoutListener, 
+  isPayoutListenerRunning, 
+  getPayoutListenerStatus,
+  resetPayoutListenerTimestamp,
+  startPayoutListenerWebSocket
+} from '@/lib/somnia/payoutListener'
+
+// Auto-start listener on server startup (only runs once when module is loaded)
+if (process.env.AUTO_START_PAYOUT_LISTENER !== 'false') {
+  const LISTENER_INTERVAL_MS = Number(process.env.PAYOUT_LISTENER_INTERVAL_MS) || 10000
+  console.log('[Payout API] Auto-starting payout listener on server startup...')
+  
+  // Use WebSocket if available, fallback to polling
+  startPayoutListenerWebSocket(LISTENER_INTERVAL_MS).catch((error) => {
+    console.error('[Payout API] Failed to start WebSocket listener, using polling:', error)
+  })
+}
 
 export const config = {
   runtime: 'nodejs',
@@ -65,6 +84,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         const gameEndData = await getGameEndData(BigInt(gameId))
         return res.status(200).json({ gameEndData: serializeBigInt(gameEndData) })
+      }
+
+      case 'startListener': {
+        const { intervalMs, useWebSocket } = params
+        const interval = intervalMs ? Number(intervalMs) : 10000
+        
+        if (useWebSocket) {
+          await startPayoutListenerWebSocket(interval)
+        } else {
+          startPayoutListener(interval)
+        }
+        
+        return res.status(200).json({ 
+          success: true, 
+          message: 'Payout listener started',
+          status: getPayoutListenerStatus()
+        })
+      }
+
+      case 'stopListener': {
+        stopPayoutListener()
+        return res.status(200).json({ 
+          success: true, 
+          message: 'Payout listener stopped',
+          status: getPayoutListenerStatus()
+        })
+      }
+
+      case 'getListenerStatus': {
+        return res.status(200).json({ status: getPayoutListenerStatus() })
+      }
+
+      case 'resetListenerTimestamp': {
+        resetPayoutListenerTimestamp()
+        return res.status(200).json({ 
+          success: true, 
+          message: 'Listener timestamp reset',
+          status: getPayoutListenerStatus()
+        })
       }
 
       default:

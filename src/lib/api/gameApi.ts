@@ -79,32 +79,39 @@ export async function makeMoveAPI(
 // Helper to deserialize BigInt values from strings
 function deserializeBigInt(obj: any): any {
   if (obj === null || obj === undefined) {
-    return obj
+    return obj;
   }
   
   if (Array.isArray(obj)) {
-    return obj.map(deserializeBigInt)
+    return obj.map(deserializeBigInt);
   }
   
   if (typeof obj === 'object') {
-    const deserialized: any = {}
+    const deserialized: any = {};
     for (const key in obj) {
       // Convert string BigInt fields back to BigInt
       if ((key === 'gameId' || key === 'stake') && typeof obj[key] === 'string') {
         try {
-          deserialized[key] = BigInt(obj[key])
-        } catch {
+          // Validate that the string is not empty before converting
+          if (obj[key] === '' || obj[key] === null || obj[key] === undefined) {
+            console.warn(`Invalid ${key} value:`, obj[key]);
+            deserialized[key] = obj[key];
+          } else {
+            deserialized[key] = BigInt(obj[key]);
+          }
+        } catch (error) {
           // If conversion fails, keep original value
-          deserialized[key] = obj[key]
+          console.warn(`Failed to convert ${key} to BigInt:`, obj[key], error);
+          deserialized[key] = obj[key];
         }
       } else {
-        deserialized[key] = deserializeBigInt(obj[key])
+        deserialized[key] = deserializeBigInt(obj[key]);
       }
     }
-    return deserialized
+    return deserialized;
   }
   
-  return obj
+  return obj;
 }
 
 export async function getGameAPI(gameId: string): Promise<Game | null> {
@@ -118,31 +125,50 @@ export async function getGameAPI(gameId: string): Promise<Game | null> {
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Failed to fetch game');
+    let errorMessage = 'Failed to fetch game';
+    try {
+      const error = await response.json();
+      errorMessage = error?.error || error?.message || errorMessage;
+    } catch {
+      // If error response is not JSON, use default message
+      errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+    }
+    throw new Error(errorMessage);
   }
 
-  const data = await response.json();
-  if (!data.game) {
-    return null
+  let data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    throw new Error('Invalid JSON response from server');
+  }
+
+  if (!data || !data.game) {
+    return null;
   }
   
   // Validate required fields before deserializing
   if (data.game.gameId === undefined || data.game.stake === undefined) {
-    console.warn('Game data missing required fields:', data.game)
-    return null
+    console.warn('Game data missing required fields:', data.game);
+    return null;
+  }
+  
+  // Ensure gameId and stake are strings before deserializing
+  if (typeof data.game.gameId !== 'string' || typeof data.game.stake !== 'string') {
+    console.warn('Game data has invalid field types:', data.game);
+    return null;
   }
   
   // Deserialize BigInt values from strings
-  const deserializedGame = deserializeBigInt(data.game) as Game
+  const deserializedGame = deserializeBigInt(data.game) as Game;
   
   // Final validation to ensure BigInt conversion succeeded
   if (typeof deserializedGame.gameId !== 'bigint' || typeof deserializedGame.stake !== 'bigint') {
-    console.error('Failed to deserialize BigInt values:', deserializedGame)
-    return null
+    console.error('Failed to deserialize BigInt values:', deserializedGame);
+    return null;
   }
   
-  return deserializedGame
+  return deserializedGame;
 }
 
 export async function getUserGamesAPI(

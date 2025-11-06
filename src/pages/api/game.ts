@@ -81,19 +81,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       case 'getGame': {
-        const { gameId } = params
+        const { gameId } = params;
         if (!gameId) {
-          return res.status(400).json({ error: 'Missing gameId' })
+          return res.status(400).json({ error: 'Missing gameId' });
         }
         try {
-          const game = await getGameById(BigInt(gameId))
-          return res.status(200).json({ game: serializeBigInt(game) })
-        } catch (error: any) {
-          // If game not found or invalid, return null
-          if (error?.message?.includes('missing') || error?.message?.includes('not found')) {
-            return res.status(200).json({ game: null })
+          // Validate gameId can be converted to BigInt
+          let gameIdBigInt: bigint
+          try {
+            gameIdBigInt = BigInt(gameId)
+          } catch (error: any) {
+            return res.status(400).json({ error: `Invalid gameId format: ${gameId}` })
           }
-          throw error
+          
+          const game = await getGameById(gameIdBigInt);
+          if (!game) {
+            return res.status(200).json({ game: null });
+          }
+          return res.status(200).json({ game: serializeBigInt(game) });
+        } catch (error: any) {
+          // Log the error for debugging
+          console.error('Error fetching game:', error);
+          
+          // If game not found or invalid, return null
+          const errorMessage = error?.message || String(error);
+          if (
+            errorMessage.includes('missing') || 
+            errorMessage.includes('not found') ||
+            errorMessage.includes('Game not found') ||
+            errorMessage.includes('Game ID is missing') ||
+            errorMessage.includes('Game ID is invalid') ||
+            errorMessage.includes('Stake is missing') ||
+            errorMessage.includes('Stake is invalid') ||
+            errorMessage.includes('Invalid numeric value')
+          ) {
+            return res.status(200).json({ game: null });
+          }
+          
+          // For other errors, return 500 with error message
+          return res.status(500).json({ 
+            error: errorMessage || 'Failed to fetch game' 
+          });
         }
       }
 

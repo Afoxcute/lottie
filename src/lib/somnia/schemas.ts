@@ -12,6 +12,10 @@ export const gameCreatedSchema =
 export const gameJoinedSchema = 
   'uint64 timestamp, uint256 gameId, address player2'
 
+// Stake commitment schema - stores player stake commitments in Data Streams
+export const stakeCommitmentSchema = 
+  'uint64 timestamp, uint256 gameId, address player, uint256 stakeAmount, bool isCommitted'
+
 // Move schema - stores player moves
 export const moveSchema = 
   'uint64 timestamp, uint256 gameId, address player, uint8 choice, uint8 roundNumber'

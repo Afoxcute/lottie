@@ -67,48 +67,85 @@ The application is structured as follows:
 
 ## Payout System
 
-The application includes an automated payout service that reads game end data from Somnia Data Streams and executes token transfers to winners.
+The application includes an **automatic** payout service that reads game end data from Somnia Data Streams and executes token transfers to winners.
+
+### Token Transfer Flow
+
+1. **Staking (Creator Only)**: Only the game creator (Player 1) stakes tokens:
+   - **Create Game**: Player 1 transfers their stake to the platform wallet before the game is created
+   - **Join Game**: Player 2 joins without staking - no token transfer required
+   - The stake transfer happens client-side using wagmi's `useSendTransaction` hook, requiring wallet approval
+   - **Stake Commitment**: The creator's stake commitment is stored in Somnia Data Streams using the `stakeCommitmentSchema` for record-keeping
+
+2. **Escrow**: The platform wallet holds the staked tokens until the game ends
+
+3. **Payout Execution**: When a game ends, the automatic payout system:
+   - Reads game end data from Data Streams (including winner and payout amount)
+   - Transfers the staked amount from the platform wallet to the winner (100% of the stake - no platform fee)
+   - Records the payout execution in Data Streams to prevent duplicates
 
 ### How It Works
 
-1. **Game End Detection**: When a game ends, the `gameEndSchema` stores the winner address and calculated payout amount (95% of total pot, with 5% platform fee).
+1. **Game End Detection**: When a game ends, the `gameEndSchema` stores the winner address and calculated payout amount (100% of the staked amount, no platform fee).
 
-2. **Payout Execution**: The `payoutService.ts` service:
-   - Scans Data Streams for completed games with unpaid winners
-   - Checks if payout has already been executed (using `payoutExecutedSchema`)
-   - Executes native STT token transfers to winners
+2. **Automatic Payout Execution**: The payout listener service automatically:
+   - Monitors for new `GameEnded` events using WebSocket block watching (with polling fallback)
+   - Detects when games end and have unpaid winners
+   - Automatically executes STT token transfers to winners
    - Records payout execution in Data Streams to prevent duplicate payments
+   - Processes payouts in real-time as games complete
 
-3. **API Endpoints**:
-   - `POST /api/payout` with `action: 'executePayout'` - Execute payout for a specific game
-   - `POST /api/payout` with `action: 'processAllPayouts'` - Process all unpaid payouts
+3. **Event-Driven Architecture**: 
+   - Uses WebSocket subscriptions to watch for new blocks
+   - Automatically triggers payout execution when `GameEnded` events are detected
+   - Falls back to polling mode if WebSocket connection fails
+   - Processes payouts immediately when games end (no manual intervention required)
+
+4. **API Endpoints**:
+   - `POST /api/payout` with `action: 'executePayout'` - Manually execute payout for a specific game
+   - `POST /api/payout` with `action: 'processAllPayouts'` - Process all unpaid payouts manually
    - `POST /api/payout` with `action: 'getUnpaidPayouts'` - Get list of unpaid games
    - `POST /api/payout` with `action: 'getGameEndData'` - Get game end data for a specific game
+   - `POST /api/payout` with `action: 'startListener'` - Start the automatic payout listener
+   - `POST /api/payout` with `action: 'stopListener'` - Stop the automatic payout listener
+   - `POST /api/payout` with `action: 'getListenerStatus'` - Get listener status
+   - `POST /api/payout` with `action: 'resetListenerTimestamp'` - Reset listener timestamp (for testing)
+
+### Automatic Startup
+
+The payout listener **automatically starts** when the server starts (unless disabled via environment variable):
+
+- **Environment Variables**:
+  - `AUTO_START_PAYOUT_LISTENER` - Set to `'false'` to disable auto-start (default: enabled)
+  - `PAYOUT_LISTENER_INTERVAL_MS` - Polling interval in milliseconds (default: 10000ms / 10 seconds)
 
 ### Usage
 
-```typescript
-import { executePayoutAPI, processAllPayoutsAPI } from '@/lib/api/payoutApi'
+The payout system runs automatically, but you can also manually control it:
 
-// Execute payout for a specific game
+```typescript
+import { executePayoutAPI } from '@/lib/api/payoutApi'
+
+// Manual payout execution (usually not needed - automatic)
 const result = await executePayoutAPI('1234567890')
 console.log(result) // { success: true, gameId, winner, payout, txHash }
-
-// Process all unpaid payouts
-const { results } = await processAllPayoutsAPI()
 ```
 
 ### Requirements
 
-- `PRIVATE_KEY` environment variable must be set with a wallet that has sufficient STT balance
-- The wallet must have enough STT to cover all pending payouts
-- `NEXT_PUBLIC_PUBLISHER_ADDRESS` must be set to the publisher address used for Data Streams
+- `PRIVATE_KEY` environment variable must be set with the private key of the platform wallet (the wallet that receives stakes and sends payouts)
+- `PLATFORM_WALLET_ADDRESS` or `NEXT_PUBLIC_PLATFORM_WALLET_ADDRESS` environment variable must be set to the platform wallet address (where stakes are received and payouts are sent from)
+  - If not set, falls back to `NEXT_PUBLIC_PUBLISHER_ADDRESS`
+  - The `PRIVATE_KEY` must correspond to this platform wallet address
+- The platform wallet must have sufficient STT balance to cover payouts (or receive tokens from creators as they stake)
+- `NEXT_PUBLIC_PUBLISHER_ADDRESS` must be set to the publisher address used for Data Streams (can be different from platform wallet)
+- Only game creators need sufficient STT balance in their wallets to stake when creating games
 
 ### Payout Calculation
 
-- Total Pot = `stake × 2` (both players stake the same amount)
-- Winner Receives = `stake × 2 × 0.95` = `stake × 1.9` (95% of total pot)
-- Platform Fee = 5% of total pot
+- Staked Amount = `stake` (only the creator stakes)
+- Winner Receives = `stake` (100% of the staked amount - no platform fee)
+- Platform Fee = 0% (winners receive the full stake)
 
 ## Project Evaluation
 

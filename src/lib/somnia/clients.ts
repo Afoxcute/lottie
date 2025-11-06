@@ -72,3 +72,40 @@ export function getPublisherAddressClient(): `0x${string}` | null {
   return pubAddress ? (pubAddress as `0x${string}`) : null
 }
 
+// Get platform wallet address for receiving stakes and sending payouts (configurable)
+export function getPlatformWalletAddress(): `0x${string}` | null {
+  // First check for dedicated platform wallet address
+  const platformAddress = process.env.PLATFORM_WALLET_ADDRESS || process.env.NEXT_PUBLIC_PLATFORM_WALLET_ADDRESS
+  if (platformAddress) {
+    return platformAddress as `0x${string}`
+  }
+  
+  // Fallback to publisher address if platform wallet not configured
+  const pubAddress = process.env.NEXT_PUBLIC_PUBLISHER_ADDRESS
+  if (pubAddress) {
+    return pubAddress as `0x${string}`
+  }
+  
+  // Last resort: use wallet client address
+  const walletClient = getWalletClient()
+  if (walletClient?.account) {
+    return walletClient.account.address
+  }
+  
+  return null
+}
+
+// Get platform wallet address for client-side (from env)
+export function getPlatformWalletAddressClient(): `0x${string}` | null {
+  if (typeof window === 'undefined') return null
+  // Check for dedicated platform wallet address
+  const platformAddress = process.env.NEXT_PUBLIC_PLATFORM_WALLET_ADDRESS
+  if (platformAddress) {
+    return platformAddress as `0x${string}`
+  }
+  
+  // Fallback to publisher address
+  const pubAddress = process.env.NEXT_PUBLIC_PUBLISHER_ADDRESS
+  return pubAddress ? (pubAddress as `0x${string}`) : null
+}
+

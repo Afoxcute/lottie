@@ -6,6 +6,7 @@ import {
   gameSchema,
   gameCreatedSchema,
   gameJoinedSchema,
+  stakeCommitmentSchema,
   moveSchema,
   roundResultSchema,
   gameEndSchema,
@@ -44,6 +45,7 @@ async function ensureSchemasRegistered() {
     { id: 'game', schema: gameSchema },
     { id: 'gameCreated', schema: gameCreatedSchema },
     { id: 'gameJoined', schema: gameJoinedSchema },
+    { id: 'stakeCommitment', schema: stakeCommitmentSchema },
     { id: 'move', schema: moveSchema },
     { id: 'roundResult', schema: roundResultSchema },
     { id: 'gameEnd', schema: gameEndSchema },
@@ -181,10 +183,22 @@ export async function createGame(gameType: number, stake: bigint, playerAddress:
 
   const gameCreatedSchemaId = await sdk.streams.computeSchemaId(gameCreatedSchema)
   const gameSchemaId = await sdk.streams.computeSchemaId(gameSchema)
+  const stakeCommitmentSchemaId = await sdk.streams.computeSchemaId(stakeCommitmentSchema)
 
-  if (!gameCreatedSchemaId || !gameSchemaId) {
+  if (!gameCreatedSchemaId || !gameSchemaId || !stakeCommitmentSchemaId) {
     throw new Error('Failed to compute schema IDs')
   }
+
+  // Store stake commitment for player 1
+  const stakeCommitmentEncoder = new SchemaEncoder(stakeCommitmentSchema)
+  const player1StakeCommitment = stakeCommitmentEncoder.encodeData([
+    { name: 'timestamp', value: timestamp, type: 'uint64' },
+    { name: 'gameId', value: gameId.toString(), type: 'uint256' },
+    { name: 'player', value: playerAddress, type: 'address' },
+    { name: 'stakeAmount', value: stake.toString(), type: 'uint256' },
+    { name: 'isCommitted', value: true, type: 'bool' },
+  ])
+  const player1StakeKey = keccak256(stringToHex(`stake-${gameId}-${playerAddress}`)) as `0x${string}`
 
   // Emit event topics
   const eventTopics = [toHex(gameId.toString(), { size: 32 })]
@@ -193,6 +207,7 @@ export async function createGame(gameType: number, stake: bigint, playerAddress:
     [
       { id: gameCreatedKey, schemaId: gameCreatedSchemaId, data: gameCreatedData },
       { id: gameStateKey, schemaId: gameSchemaId, data: gameData },
+      { id: player1StakeKey, schemaId: stakeCommitmentSchemaId, data: player1StakeCommitment },
     ],
     [
       {
@@ -270,6 +285,8 @@ export async function joinGame(
   if (!gameJoinedSchemaId || !gameSchemaId) {
     throw new Error('Failed to compute schema IDs')
   }
+
+  // Note: Only the creator (Player 1) stakes tokens, so we don't store a stake commitment for Player 2
 
   const eventTopics = [toHex(gameId.toString(), { size: 32 })]
 
@@ -499,7 +516,7 @@ async function resolveRound(gameId: bigint, gameState: Game) {
     
     const payout = winner === '0x0000000000000000000000000000000000000000'
       ? BigInt(0)
-      : BigInt(gameState.stake.toString()) * BigInt(2) * BigInt(9500) / BigInt(10000) // 5% fee
+      : BigInt(gameState.stake.toString()) // Winner receives 100% of creator's stake (no platform fee)
 
     const gameEndEncoder = new SchemaEncoder(gameEndSchema)
     const gameEndData = gameEndEncoder.encodeData([
@@ -640,17 +657,53 @@ export async function getGameById(gameId: bigint): Promise<Game | null> {
   const lastPlayerMoveValue = getValue(decoded[10])
 
   // Validate required fields before converting to BigInt
-  if (gameIdValue === undefined || gameIdValue === null) {
+  // Check for undefined, null, empty string, or invalid values
+  if (gameIdValue === undefined || gameIdValue === null || gameIdValue === '') {
     throw new Error('Game ID is missing from game data')
   }
-  if (stakeValue === undefined || stakeValue === null) {
+  if (stakeValue === undefined || stakeValue === null || stakeValue === '') {
     throw new Error('Stake is missing from game data')
   }
 
+  // Convert to string first, then validate it's a valid number string
+  const gameIdStr = String(gameIdValue).trim()
+  const stakeStr = String(stakeValue).trim()
+  
+  if (!gameIdStr || gameIdStr === 'undefined' || gameIdStr === 'null') {
+    throw new Error('Game ID is invalid')
+  }
+  if (!stakeStr || stakeStr === 'undefined' || stakeStr === 'null') {
+    throw new Error('Stake is invalid')
+  }
+
+  // Validate that the strings represent valid numbers before BigInt conversion
+  let gameIdBigInt: bigint
+  let stakeBigInt: bigint
+  
+  try {
+    // Test if the string can be converted to a number
+    if (isNaN(Number(gameIdStr))) {
+      throw new Error(`Game ID is not a valid number: ${gameIdStr}`)
+    }
+    if (isNaN(Number(stakeStr))) {
+      throw new Error(`Stake is not a valid number: ${stakeStr}`)
+    }
+    
+    // Attempt BigInt conversion
+    gameIdBigInt = BigInt(gameIdStr)
+    stakeBigInt = BigInt(stakeStr)
+  } catch (error: any) {
+    // Provide more specific error message for BigInt conversion failures
+    if (error.message.includes('Cannot convert')) {
+      throw new Error(`Invalid numeric value for game data: gameId=${gameIdStr}, stake=${stakeStr}`)
+    }
+    throw new Error(`Invalid numeric value: ${error.message}`)
+  }
+
   return {
-    gameId: BigInt(String(gameIdValue)),
+    gameId: gameIdBigInt,
     players: [player1Address, player2Address],
-    stake: BigInt(String(stakeValue)),
+    stake: stakeBigInt,
     gameType: Number(gameTypeValue ?? 0),
     roundsPlayed: Number(roundsPlayedValue ?? 0),
     scores,

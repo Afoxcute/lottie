@@ -1,10 +1,11 @@
 // Payout service for executing token transfers to game winners
 import { SDK, SchemaEncoder, zeroBytes32 } from '@somnia-chain/streams'
-import { getPublicClient, getWalletClient, getPublisherAddress } from './clients'
+import { getPublicClient, getWalletClient, getPublisherAddress, getPlatformWalletAddress } from './clients'
 import { waitForTransactionReceipt } from 'viem/actions'
 import { toHex, type Hex } from 'viem'
-import { gameEndSchema, payoutExecutedSchema } from './schemas'
+import { gameEndSchema, payoutExecutedSchema, stakeCommitmentSchema, gameSchema } from './schemas'
 import { somniaTestnet } from './chain'
+import { getGameById } from './gameService'
 
 // Helper to get SDK instance
 function getSdk(write = false) {
@@ -26,6 +27,53 @@ function getValue(field: any): any {
   if (field?.value?.value !== undefined) return field.value.value
   if (field?.value !== undefined) return field.value
   return field
+}
+
+// Get stake commitments for a game from Data Streams
+async function getStakeCommitments(gameId: bigint): Promise<{ player1: bigint; player2: bigint } | null> {
+  const sdk = getSdk(false)
+  let publisher = getPublisherAddress()
+  
+  if (!publisher) {
+    publisher = process.env.NEXT_PUBLIC_PUBLISHER_ADDRESS as `0x${string}` | null
+  }
+  
+  if (!publisher) return null
+
+  const gameState = await getGameById(gameId)
+  if (!gameState) return null
+
+  const stakeCommitmentSchemaId = await sdk.streams.computeSchemaId(stakeCommitmentSchema)
+  if (!stakeCommitmentSchemaId) return null
+
+  try {
+    const allCommitments = await sdk.streams.getAllPublisherDataForSchema(stakeCommitmentSchemaId, publisher)
+    if (!allCommitments || !Array.isArray(allCommitments)) return null
+
+    let player1Stake = BigInt(0)
+    let player2Stake = BigInt(0)
+
+    for (const row of allCommitments) {
+      if (Array.isArray(row) && row.length >= 5) {
+        const commitmentGameId = BigInt(String(getValue(row[1])))
+        const player = String(getValue(row[2])).toLowerCase()
+        const stakeAmount = BigInt(String(getValue(row[3])))
+
+        if (commitmentGameId === gameId) {
+          if (player === gameState.players[0].toLowerCase()) {
+            player1Stake = stakeAmount
+          } else if (player === gameState.players[1].toLowerCase()) {
+            player2Stake = stakeAmount
+          }
+        }
+      }
+    }
+
+    return { player1: player1Stake, player2: player2Stake }
+  } catch (error) {
+    console.error('Error fetching stake commitments:', error)
+    return null
+  }
 }
 
 // Interface for game end data
@@ -179,6 +227,29 @@ export async function executePayout(gameId: bigint): Promise<PayoutResult> {
     }
   }
 
+  // Get platform wallet address (where stakes are received and payouts are sent from)
+  const platformWalletAddress = getPlatformWalletAddress()
+  if (!platformWalletAddress) {
+    return {
+      success: false,
+      gameId,
+      winner: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+      payout: BigInt(0),
+      error: 'Platform wallet address not configured. Set PLATFORM_WALLET_ADDRESS or NEXT_PUBLIC_PLATFORM_WALLET_ADDRESS.',
+    }
+  }
+
+  // Verify that wallet client address matches platform wallet address
+  if (walletClient.account.address.toLowerCase() !== platformWalletAddress.toLowerCase()) {
+    return {
+      success: false,
+      gameId,
+      winner: '0x0000000000000000000000000000000000000000' as `0x${string}`,
+      payout: BigInt(0),
+      error: `Wallet client address (${walletClient.account.address}) does not match platform wallet address (${platformWalletAddress}). PRIVATE_KEY must be the private key for the platform wallet.`,
+    }
+  }
+
   try {
     // Check if payout already executed
     const isExecuted = await isPayoutExecuted(gameId)
@@ -217,29 +288,19 @@ export async function executePayout(gameId: bigint): Promise<PayoutResult> {
 
     const publicClient = getPublicClient()
     
-    // Check wallet balance
-    const balance = await publicClient.getBalance({ address: walletClient.account.address })
+    // Check platform wallet balance
+    const balance = await publicClient.getBalance({ address: platformWalletAddress })
     if (balance < gameEndData.payout) {
       return {
         success: false,
         gameId,
         winner: gameEndData.winner,
         payout: gameEndData.payout,
-        error: `Insufficient balance. Required: ${gameEndData.payout.toString()}, Available: ${balance.toString()}`,
+        error: `Insufficient balance in platform wallet. Required: ${gameEndData.payout.toString()}, Available: ${balance.toString()}`,
       }
     }
 
-    // Execute native token transfer
-    if (!walletClient.account) {
-      return {
-        success: false,
-        gameId,
-        winner: gameEndData.winner,
-        payout: gameEndData.payout,
-        error: 'Wallet account not available',
-      }
-    }
-
+    // Execute native token transfer from platform wallet to winner
     const txHash = await walletClient.sendTransaction({
       account: walletClient.account,
       chain: somniaTestnet,

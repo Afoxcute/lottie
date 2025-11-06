@@ -2,9 +2,11 @@
 
 import React, { useState } from 'react';
 import { Trophy, Coins, Swords, Timer, Info } from 'lucide-react';
-import { useAccount } from 'wagmi';
+import { useAccount, useSendTransaction, useWaitForTransactionReceipt } from 'wagmi';
+import { parseEther } from 'viem';
 import { useNetworkInfo } from '../hooks/useNetworkInfo';
 import { createGameAPI } from '../lib/api/gameApi';
+import { getPlatformWalletAddressClient } from '../lib/somnia/clients';
 import toast from 'react-hot-toast';
 import { ErrorBoundary } from 'react-error-boundary';
 
@@ -38,10 +40,64 @@ export default function CreateGame() {
   const [selectedType, setSelectedType] = useState(0);
   const [stakeAmount, setStakeAmount] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isTransferring, setIsTransferring] = useState(false);
+  const [pendingGameData, setPendingGameData] = useState<{ type: number; stake: string } | null>(null);
+  
+  const platformAddress = getPlatformWalletAddressClient();
+  const { sendTransaction, data: transferHash, isPending: isSending } = useSendTransaction();
+  const { isLoading: isConfirmingTransfer, isSuccess: isTransferConfirmed } = useWaitForTransactionReceipt({ 
+    hash: transferHash 
+  });
+
+  // Handle transfer confirmation and create game
+  React.useEffect(() => {
+    if (isTransferConfirmed && pendingGameData && !isLoading) {
+      const createGameAfterTransfer = async () => {
+        try {
+          setIsLoading(true);
+          const toastId = toast.loading('Creating your game...', {
+            icon: '🎮',
+          });
+
+          const result = await createGameAPI(pendingGameData.type, pendingGameData.stake, address!);
+          
+          toast.success(`Game ${result.gameId} created successfully! 🎮`, {
+            id: toastId,
+            duration: 5000,
+            icon: '🔥',
+          });
+
+          // Reset form
+          setSelectedType(0);
+          setStakeAmount('');
+          setPendingGameData(null);
+          setIsTransferring(false);
+        } catch (err: any) {
+          toast.error(
+            err?.message || 'Failed to create game after transfer',
+            {
+              duration: 3000,
+              icon: '❌',
+            }
+          );
+          console.error('Error creating game after transfer:', err);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      createGameAfterTransfer();
+    }
+  }, [isTransferConfirmed, pendingGameData, address, isLoading]);
 
   const handleCreateGame = async () => {
     if (!stakeAmount || !address) {
       toast.error('Please connect your wallet and enter a stake amount');
+      return;
+    }
+
+    if (!platformAddress) {
+      toast.error('Platform wallet not configured');
       return;
     }
 
@@ -51,30 +107,37 @@ export default function CreateGame() {
     });
 
     try {
-      setIsLoading(true);
-      const result = await createGameAPI(selectedType, stakeAmount, address);
-      
-      toast.success(`Game ${result.gameId} created successfully! 🎮`, {
+      // Step 1: Transfer stake to platform wallet
+      const stakeWei = parseEther(stakeAmount);
+      toast.loading('Please approve the token transfer in your wallet...', {
         id: toastId,
-        duration: 5000,
-        icon: '🔥',
+        icon: '💸',
       });
 
-      // Reset form
-      setSelectedType(0);
-      setStakeAmount('');
+      setIsTransferring(true);
+      setPendingGameData({ type: selectedType, stake: stakeAmount });
+
+      sendTransaction({
+        to: platformAddress,
+        value: stakeWei,
+      });
+
+      toast.loading('Waiting for transfer confirmation...', {
+        id: toastId,
+        icon: '⏳',
+      });
     } catch (err: any) {
       toast.error(
-        err?.message || 'Battle creation failed',
+        err?.message || 'Failed to initiate transfer',
         {
           id: toastId,
           duration: 3000,
           icon: '❌',
         }
       );
-      console.error('Error creating game:', err);
-    } finally {
-      setIsLoading(false);
+      console.error('Error initiating transfer:', err);
+      setIsTransferring(false);
+      setPendingGameData(null);
     }
   };
 
@@ -157,16 +220,16 @@ export default function CreateGame() {
         {/* Create Game Button */}
         <button
           onClick={handleCreateGame}
-          disabled={!stakeAmount || isLoading || !address}
+          disabled={!stakeAmount || isLoading || isTransferring || isSending || isConfirmingTransfer || !address}
           className={`w-full py-4 rounded-lg font-semibold flex items-center justify-center space-x-2
           ${
-            !stakeAmount || !address
+            !stakeAmount || !address || isLoading || isTransferring
               ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
               : 'bg-gradient-to-r from-blue-500 to-purple-500 text-white hover:opacity-90 hover:shadow-lg hover:shadow-blue-500/20 transform hover:-translate-y-1 transition-all duration-300'
           }
         `}
         >
-          {isLoading ? (
+          {(isLoading || isTransferring || isSending || isConfirmingTransfer) ? (
             <div className='w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin' />
           ) : (
             <>
